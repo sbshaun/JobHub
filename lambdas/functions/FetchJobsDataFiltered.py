@@ -15,6 +15,16 @@ except ImportError:
     from DbConnection import get_db_connection # dbConnectionLayer
     from ProvinceMapping import PROVINCE_MAPPING # provinceMappingLayer
     from DbConfig import DB_CONFIG # dbConfig file
+    import logger # loggerLayer
+else:
+    import sys
+    import os
+    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+    sys.path.insert(0, project_root)
+    from lambdas.layers.dbConnectionLayer.python.DbConnection import get_db_connection
+    from lambdas.layers.provinceMappingLayer.python.ProvinceMapping import PROVINCE_MAPPING
+    from lambdas.layers.dbConfigLayer.python.DbConfig import DB_CONFIG 
+    import lambdas.layers.loggerLayer.python.logger as logger
 
 FUNCTION_NAME = 'FetchJobsDataFiltered' # For error logging purpose
 
@@ -41,11 +51,9 @@ def get_date_days_ago(days: str) -> str:
         days_ago = int(days)
         target_date = datetime.datetime.now() - datetime.timedelta(days=days_ago)
         return target_date.strftime('%Y-%m-%d')
-    except ValueError:
-        sub_function_name = "get_date_days_ago()"
-        logging.error("[%s - %s]: Invalid input for days", FUNCTION_NAME, sub_function_name)
-        raise
-    
+    except ValueError as e:
+        logger.error(FUNCTION_NAME, "get_date_days_ago", e)
+        raise ValueError(f"Invalid input for days") from None
     
 def build_query(event: Dict[str, Any]) -> (str, List[Any]):
     """
@@ -100,57 +108,49 @@ def execute_query(cursor: psycopg2.extensions.cursor, query: str, values: List[A
         cursor.execute(query, values)
         return cursor.fetchall()
     except Exception as e:
-        sub_function_name = "execute_query()"
-        logging.error("[%s - %s]: Database connection failed. Exception: %s", FUNCTION_NAME, sub_function_name, e)
+        logger.error(FUNCTION_NAME, "execute_query", e)
         raise
 
 
 def lambda_handler(event, context):
-    """
-    AWS Lambda handler function to fetch filtered job data based on the event.
+    try:
+        with get_db_connection(**DB_CONFIG) as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
+                query, values = build_query(event)
+                results = execute_query(cursor, query, values)
+                json_results = json.dumps(results, default=str)
+        logger.success(FUNCTION_NAME, "Data fetched successfully")
+        return {
+            'statusCode': 200,
+            'body': json_results,
+            'records_fetched': len(results)
+        }
+    except ValueError as e:
+        return {
+            'statusCode': 400,
+            'body': json.dumps({'error': str(e)}),
+            'records_fetched': 0
+        }
+    except Exception as e:
+        logger.error(FUNCTION_NAME, "lambda_handler", e)
+        return {
+            'statusCode': 500,
+            'body': json.dumps({'error': 'Internal server error'}),
+            'records_fetched': 0
+        }
 
-    :param event: The event triggering this Lambda function.
-    :param context: Runtime information provided by AWS Lambda.
-    :return: A dictionary with statusCode, body (JSON string), and number of records.
-    """
-    with get_db_connection(**DB_CONFIG) as conn:
-        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
-            query, values = build_query(event)
-            results = execute_query(cursor, query, values)
-            json_results = json.dumps(results, default=str)
-
-    return {
-        'statusCode': 200,
-        'body': json_results,
-        'records_fetched': len(results)
-    }
 
 # Local development 
 if __name__ == "__main__":
-    # Import absolute path
-    import sys
-    import os
-    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
-    sys.path.insert(0, project_root)
-    from lambdas.layers.dbConnectionLayer.python.DbConnection import get_db_connection
-    from lambdas.layers.provinceMappingLayer.python.ProvinceMapping import PROVINCE_MAPPING
-    from lambdas.layers.dbConfigLayer.python.DbConfig import DB_CONFIG 
-    
-    logging.basicConfig(level=logging.INFO)
-
     # Mock event for getting all jobs:
     # mock_event = {'location': '', 'postedWithin': '', 'title': ''}
-    mock_event = {'location': 'BC', 'postedWithin': '10', 'title': 'software-engineer'}
+    mock_event = {'location': '', 'postedWithin': '25', 'title': ''}
     result = lambda_handler(mock_event, None)
 
-    # Extracting the statusCode, body, and records_fetched from the result
     status_code = result['statusCode']
-    records_fetched = result['records_fetched']
     body = json.loads(result['body'])
+    records_fetched = result['records_fetched']
 
-    # Print statusCode, one example from body (if available), and records_fetched
     print(f"Status Code: {status_code}")
-    # print(f"Example Record: {body[0] if body else 'No records found'}")
-    print(f"Example Record: {body if body else 'No records found'}")
-    
+    print(f"Body: {body if body else 'No records found'}")
     print(f"Total Records Fetched: {records_fetched}")

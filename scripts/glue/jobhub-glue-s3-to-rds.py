@@ -110,8 +110,7 @@ def main(file_path):
 
 if __name__ == "__main__":
     db_config = load_environment_variables()
-
     # Use the S3 path from the environment variables if available, otherwise default to the local file 'jobs.csv'
-    file_path = db_config.get('S3_PATH', 'aggregated_jobs.csv')
+    file_path = db_config.get('S3_PATH', '/Users/markvu/code/projects/Jobhub/scripts/glue/aggregated_jobs.csv')
 
     main(file_path)
